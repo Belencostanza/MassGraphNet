@@ -28,10 +28,10 @@ dr             = 0.0                       #dropout rate. Hyper-parameter
 epochs         = 300                       #number of epochs to train the network. Hyper-parameter
 
 #name of the model
-f_model = 'model_omega_300.pt'
+f_model = 'model_mass_300.pt'
 
 #name of the loss 
-name_loss = 'omega_loss_300'
+name_loss = 'mass_loss_300'
 
 torch.manual_seed(12345)
 #data_list = data_list.shuffle() #no le hice un shuffle inicial en la data
@@ -46,8 +46,11 @@ else:
 
 print('reading data')
 #load the dataset
-train_dataset = torch.load('omega_train.pt')
-valid_dataset = torch.load('omega_valid.pt')
+train_dataset = torch.load('masswdm_train.pt')
+valid_dataset = torch.load('masswdm_valid.pt')
+
+u = train_dataset[0].u
+u_dim = u.shape[1]
 
 print('finish')
 
@@ -68,7 +71,7 @@ valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
 
 #MPL for update edges attributes
 class EdgeModel(nn.Module):
-    def __init__(self, node_in, node_out, edge_in, edge_out, hidden_dim):
+    def __init__(self, node_in, node_out, edge_in, edge_out, hidden_dim, global_in):
         super().__init__()
 
         layers = [Linear(node_in*2 + edge_in, hidden_dim),
@@ -91,10 +94,10 @@ class EdgeModel(nn.Module):
 
 #MPL for update nodes attributes
 class NodeModel(nn.Module):
-    def __init__(self, node_in, node_out, edge_in, edge_out, hidden_dim):
+    def __init__(self, node_in, node_out, edge_in, edge_out, hidden_dim, global_in):
         super().__init__()
 
-        layers = [Linear(node_in + 3*edge_in + 1, hidden_dim),
+        layers = [Linear(node_in + 3*edge_in + global_in, hidden_dim),
                   ReLU(),
                   Linear(hidden_dim, node_out)]
 
@@ -121,15 +124,16 @@ class NodeModel(nn.Module):
 
 
 class GNN(nn.Module):
-    def __init__(self, node_features, n_layers, hidden_dim, dim_out):
+    def __init__(self, u_dim, node_features, n_layers, hidden_dim, dim_out):
         super().__init__()
 
         self.n_layers = n_layers
         self.dim_out = dim_out
-        # Number of input node features = 10
+        # Number of input node features = 12
         node_in = node_features
         edge_in = 1
         edge_out = 1
+        global_in = u_dim
         node_out = node_features 
         hidden_dim = hidden_dim
 
@@ -138,13 +142,13 @@ class GNN(nn.Module):
 
         layers = []
         for i in range(n_layers-1):
-            lay = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_dim),
-                        edge_model=EdgeModel(node_in, node_out, edge_in, edge_out, hidden_dim))
+            lay = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_dim, global_in),
+                        edge_model=EdgeModel(node_in, node_out, edge_in, edge_out, hidden_dim, global_in))
             layers.append(lay)
 
         self.layers = ModuleList(layers)
 
-        self.outlayer = Sequential(Linear(3*node_out + 1, hidden_dim),
+        self.outlayer = Sequential(Linear(3*node_out + global_in, hidden_dim),
                                 ReLU(),
                                 Linear(hidden_dim, hidden_dim),
                                 ReLU(),
@@ -171,7 +175,7 @@ class GNN(nn.Module):
         return out
     
 #las node features son 10
-model = GNN(node_features = 12, n_layers = 3, hidden_dim = 64, dim_out = 1)
+model = GNN(u_dim = u_dim, node_features = 12, n_layers = 3, hidden_dim = 64, dim_out = 1)
 criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
 
