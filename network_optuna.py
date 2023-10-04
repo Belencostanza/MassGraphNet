@@ -1,9 +1,6 @@
 import os
 import torch
 
-#%matplotlib inline
-#import networkx as nx
-#import matplotlib.pyplot as plt
 
 from torch_geometric.data import Data
 import numpy as np
@@ -20,32 +17,21 @@ from torch_geometric.loader import DataLoader
 
 import optuna
 
-study_name = "all_sim_small"
-storage = "sqlite:///example_all.db"
-study = optuna.load_study(study_name=study_name, storage=storage)
-trial = study.best_trial
-lr       = trial.params['lr']
-wd       = trial.params['wd']
-n_layers = trial.params['n_layers']
-n_units = trial.params['n_units']
-
 
 min_valid_loss = 1e7                       #set this to a large number. Used to compute
 
 batch_size     = 8                        #number of elements each batch contains. Hyper-parameter
-#lr             = 0.0002613920036234809                      #value of the learning rate. Hyper-parameter
-#wd             = 0.0003057959275786215                       #value of the weight decay. Hyper-parameter
-dr             = 0.0                       #dropout rate. Hyper-parameter
-epochs         = 100                       #number of epochs to train the network. Hyper-parameter
 
-#n_layers=2
-#n_units=88
+#lr             = 1e-5                      #value of the learning rate. Hyper-parameter
+#wd             = 0.0                       #value of the weight decay. Hyper-parameter
+dr             = 0.0                       #dropout rate. Hyper-parameter
+epochs         = 200                       #number of epochs to train the network. Hyper-parameter
 
 #name of the model
-f_model = 'model_mass_best_all.pt'
+#f_model = 'model_mass_300.pt'
 
 #name of the loss 
-name_loss = 'mass_loss_best_all'
+#name_loss = 'mass_loss_300'
 
 torch.manual_seed(12345)
 #data_list = data_list.shuffle() #no le hice un shuffle inicial en la data
@@ -187,16 +173,8 @@ class GNN(nn.Module):
         out = self.outlayer(out)
 
         return out
-    
-#las node features son 10
-model = GNN(u_dim = u_dim, node_features = 12, n_layers = n_layers, hidden_dim = n_units, dim_out = 1)
-criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
-optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
 
-
-model.to(device=device)
-
-def train():
+def train(model,optimizer,criterion):
   train_loss = 0.0
   model.train()
   for data in train_loader:# Iterate in batches over the training dataset.
@@ -214,7 +192,7 @@ def train():
   #print('Training loss =', last_loss)
   return last_loss
 
-def eval():
+def eval(model,criterion):
   valid_loss = 0.0
   model.eval()
   for data in valid_loader:
@@ -227,19 +205,51 @@ def eval():
   val_loss = valid_loss/len(valid_loader)
   #print('test loss =', val_loss)
   return val_loss
+    
 
-train_epoch=[]
-valid_epoch=[]
-for epoch in range(epochs):
-  train_loss = train()
-  valid_loss = eval()
-  train_epoch.append(train_loss)
-  valid_epoch.append(valid_loss)
-  print(f'Epoch: {epoch:03d}, Train loss: {train_loss:.4f}, Test loss: {valid_loss:.4f}')
+#define an objective function to be minimized by the loss function
+def objective(trial):
 
-  if valid_loss<min_valid_loss:
-      torch.save(model.state_dict(), f_model)
-      min_valid_loss = valid_loss
-      print(' (best-model)')
+    #suggest values in the number of layers
+    n_layers = trial.suggest_int('n_layers',2,3)
+    #suggest values in the number of neurons
+    n_units = trial.suggest_int('n_units',64,128)
 
-np.savez(name_loss, train_epoch, valid_epoch)
+    model = GNN(u_dim = u_dim, node_features = 12, n_layers = n_layers, hidden_dim = n_units, dim_out = 1)
+
+    criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
+
+    
+    lr = trial.suggest_loguniform('lr', 1e-5,1e-1)
+    wd = trial.suggest_loguniform('wd', 1e-9,1e-1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
+
+    model.to(device=device)
+
+    for epoch in range(epochs):
+        train_loss = train(model,optimizer,criterion)
+        valid_loss = eval(model,criterion)
+
+    return valid_loss
+
+storage = "sqlite:///example_all.db"
+study = optuna.create_study(study_name="all_sim_small", direction='minimize', storage=storage)
+study.optimize(objective, n_trials=100)
+
+#pruned_trials = [t for t in study.trials if t.state == optuna.structs.TrialState.PRUNED]
+#complete_trials = [t for t in study.trials if t.state == optuna.structs.TrialState.COMPLETE]
+
+print("Study statistics: ")
+print("  Number of finished trials: ", len(study.trials))
+#print("  Number of pruned trials: ", len(pruned_trials))
+#print("  Number of complete trials: ", len(complete_trials))
+
+print("Best trial:")
+trial = study.best_trial
+
+print("value:", trial.value)
+
+print("Params:")
+for key, value in trial.params.items():
+    print("{}:{}".format(key, value))
+    

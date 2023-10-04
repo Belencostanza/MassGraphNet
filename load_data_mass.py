@@ -23,19 +23,19 @@ Nstar_th = 5
 global_parameters = True
 
 #in this case I'm creating a training dataset and a validation dataset splitting the simulations
-simpathroot = '/home/bcostanza/MachineLearning/project/data/'
+simpathroot = '/data/bcostanza/data'
 nsim = 1024
 
 #nhalos = 20 #number of haloes per simulation
 #put numbers to choose how many simulations are you taking for training, validation and testing
-split_train = 500  #0 to 500 simulations for training
-split_valid = 700 #500 to 700 simulations for validation
-split_test = 750 #700 to 750 simulations for testing
+split_train = 720  #0 to 500 simulations for training
+split_valid = 870 #500 to 700 simulations for validation
+split_test = nsim #700 to 750 simulations for testing
 
 #name of the dataset 
-name_train = 'masswdm_train.pt'
-name_valid = 'masswdm_valid.pt'
-name_test = 'masswdm_test.pt'
+name_train = 'masswdm_train_menos10_all.pt'
+name_valid = 'masswdm_valid_menos10_all.pt'
+name_test = 'masswdm_test_menos10_all.pt'
 
 #--------------------------------------------------------------------------------------------------------
 
@@ -87,17 +87,17 @@ def features_new(fin):
     indexes = np.argwhere(HaloMass>0.).reshape(-1) #haloes index in the given simulation
     
     #threshold in the number of stars. 
-    indexes_star = np.where(Nstar>Nstar_th)[0]
+    #indexes_star = np.where(Nstar>Nstar_th)[0]
     
-    Pos_subhalo = Pos_subhalo[indexes_star] 
-    Mstar   = Mstar[indexes_star]
-    Rstar   = Rstar[indexes_star]
-    Mdm = Mdm[indexes_star]
-    HaloID = HaloID[indexes_star]
-    Vel_subhalo = Vel_subhalo[indexes_star]
-    GMetal = GMetal[indexes_star]
-    SMetal = SMetal[indexes_star]
-    Vmax = Vmax[indexes_star]
+    #Pos_subhalo = Pos_subhalo[indexes_star] 
+    #Mstar   = Mstar[indexes_star]
+    #Rstar   = Rstar[indexes_star]
+    #Mdm = Mdm[indexes_star]
+    #HaloID = HaloID[indexes_star]
+    #Vel_subhalo = Vel_subhalo[indexes_star]
+    #GMetal = GMetal[indexes_star]
+    #SMetal = SMetal[indexes_star]
+    #Vmax = Vmax[indexes_star]
     
     #correct simulations outside the box
     Pos_subhalo[np.where(Pos_subhalo<0.0)]+=1.0
@@ -152,7 +152,7 @@ def create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters):
         n_sub = len(tab[tab[:,0]==ind])
         #num_sub.append(n_sub) 
     
-        if n_sub > 10: 
+        if n_sub < 10 and n_sub > 4: 
             tab_halo = tab[tab[:,0]==ind][:,1:]  #select subhalos within a halo with index id (graph por halo)
             
             #tab_halo[:,0:3] -= GroupPos[ind]  #in the halo frame
@@ -166,9 +166,11 @@ def create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters):
             edge_attr = torch.zeros((index_edge.shape[1], 1)) #shape=[number of edges, features=0]
             
             u_number = np.log10(n_sub).reshape(1,1) #number of subhalos in the simulation as a global feature
-            
+            #print(np.shape(u_number))           
+
             if global_parameters == True:
-                u_paramters = parameters.reshape(1,5)
+                u_parameters = parameters.reshape(1,5)
+                #print(np.shape(u_parameters))
                 u = np.concatenate((u_number, u_parameters), axis=1)
             else:
                 u = u_number
@@ -182,13 +184,15 @@ def create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters):
 
 #-------------------------------------------------------------------------------------------------------------------------------
 
-mass_sim = np.loadtxt('sobol_sequence_WDM_real_values.txt')
+mass_sim = np.loadtxt('/home/bcostanza/MachineLearning/project/sobol_sequence_WDM_real_values.txt')
 
 #read the data
+
 
 def training_set():
     dataset_train = []
     for i in range(0,split_train):
+        print('reading simulation', i)
         fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
         
         tab, GroupPos, GroupVel, indexes = features_new(fin)
@@ -196,7 +200,7 @@ def training_set():
         mwdm = mass_sim[i,-1]        
         parameters = mass_sim[i,:-1]  #other parameters of the simulation
     
-        halolist = indexes #[:nhalos]
+        halolist = indexes#[:nhalos]
     
         data_sim = create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters)
     
@@ -206,6 +210,7 @@ def training_set():
 def validation_set():
     dataset_valid = []
     for i in range(split_train,split_valid):
+        print('reading simulation', i)
         fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
         
         tab, GroupPos, GroupVel, indexes = features_new(fin)
@@ -213,7 +218,7 @@ def validation_set():
         mwdm = mass_sim[i,-1]
         parameters = mass_sim[i,:-1]
         
-        halolist = indexes #[:nhalos]
+        halolist = indexes#[:nhalos]
 
         data_sim = create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters)
 
@@ -223,6 +228,7 @@ def validation_set():
 def test_set():
     dataset_test = []
     for i in range(split_valid,split_test):
+        print('reading simulation', i)
         fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
 
         tab, GroupPos, GroupVel, indexes = features_new(fin)
@@ -230,7 +236,7 @@ def test_set():
         mwdm = mass_sim[i,-1]
         parameters = mass_sim[i,:-1]
         
-        halolist = indexes  #[:nhalos]
+        halolist = indexes#[:nhalos]
 
         data_sim = create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters)
 
@@ -242,9 +248,9 @@ def test_set():
 print('reading')
 
 train_dataset = training_set()
-valid_dataset = validation_set()
-
 torch.save(train_dataset, name_train)
+
+valid_dataset = validation_set()
 torch.save(valid_dataset, name_valid)
     
 test_dataset = test_set()
