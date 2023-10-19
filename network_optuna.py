@@ -17,6 +17,12 @@ from torch_geometric.loader import DataLoader
 
 import optuna
 
+from load_data_mass import training_set, validation_set, test_set, n_CPU
+
+# from accelerate import Accelerator
+
+# accelerator = Accelerator()
+
 
 min_valid_loss = 1e7                       #set this to a large number. Used to compute
 
@@ -25,7 +31,7 @@ batch_size     = 8                        #number of elements each batch contain
 #lr             = 1e-5                      #value of the learning rate. Hyper-parameter
 #wd             = 0.0                       #value of the weight decay. Hyper-parameter
 dr             = 0.0                       #dropout rate. Hyper-parameter
-epochs         = 200                       #number of epochs to train the network. Hyper-parameter
+epochs         = 1                       #number of epochs to train the network. Hyper-parameter
 
 #name of the model
 #f_model = 'model_mass_300.pt'
@@ -46,16 +52,8 @@ else:
 
 print('reading data')
 #load the dataset
-train_dataset = torch.load('masswdm_train_menos10_all.pt')
-valid_dataset = torch.load('masswdm_valid_menos10_all.pt')
-
-u = train_dataset[0].u
-u_dim = u.shape[1]
-
-print('finish')
-
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
+# train_dataset = torch.load('masswdm_train_menos10_all.pt')
+# valid_dataset = torch.load('masswdm_valid_menos10_all.pt')
 
 
 #for step, data in enumerate(train_loader):
@@ -174,9 +172,12 @@ class GNN(nn.Module):
 
         return out
 
-def train(model,optimizer,criterion):
+def train(model,optimizer,criterion, train_loader = None):
   train_loss = 0.0
   model.train()
+  
+#   model, optimizer, training_dataloader = accelerator.prepare(model, optimizer, train_loader)
+  
   for data in train_loader:# Iterate in batches over the training dataset.
     data.to(device)
     optimizer.zero_grad()
@@ -186,15 +187,18 @@ def train(model,optimizer,criterion):
     loss = criterion(out, y_target)
 
     loss.backward()  # Derive gradients.
+    # accelerator.backward(loss)
     optimizer.step()  # Update parameters based on gradients.
     train_loss += loss.item()
   last_loss = train_loss/len(train_loader)
   #print('Training loss =', last_loss)
   return last_loss
 
-def eval(model,criterion):
+def eval(model,criterion, valid_loader = None, save = False, hyperparameters = []):
   valid_loss = 0.0
   model.eval()
+  predicted = np.array([])
+  true = np.array([])
   for data in valid_loader:
     data.to(device)
     out = model(data)
@@ -202,14 +206,38 @@ def eval(model,criterion):
     y_target = torch.reshape(y_target, (data.num_graphs, 1))
     loss = criterion(out, y_target)
     valid_loss += loss.item()
+
+    if save:
+        predicted = np.append(predicted, out.detach().cpu().numpy())
+        true = np.append(true, y_target.detach().cpu().numpy())
+  
   val_loss = valid_loss/len(valid_loader)
   #print('test loss =', val_loss)
+  if save:
+    with open('outputs/' + name_model(hyperparameters) + ".npy", 'wb') as f:
+        np.save(f, predicted)
+        np.save(f, true)
+    
+    torch.save(model.state_dict(), "models/" + name_model(hyperparameters))
+        
   return val_loss
     
-
+def name_model(hyperparameters):
+    return "n_layers_" + str(hyperparameters[0]) +  "_n_units_" + str(hyperparameters[1]) + "_lr_" + "{:.3e}".format(hyperparameters[2]) + "_wd_" + "{:.3e}".format(hyperparameters[3], 3) + "_rlink_" + "{:.3e}".format(hyperparameters[4], 3)
+        
 #define an objective function to be minimized by the loss function
 def objective(trial):
+    # Create the dataset based on the link 
+    r_link = trial.suggest_float('r_link', 1e-3, 2e-1)
+    train_dataset = training_set(r_link)
+    valid_dataset = validation_set(r_link)
 
+    u = train_dataset[0].u
+    u_dim = u.shape[1]
+
+    print('finish')
+    
+    
     #suggest values in the number of layers
     n_layers = trial.suggest_int('n_layers',2,3)
     #suggest values in the number of neurons
@@ -220,21 +248,30 @@ def objective(trial):
     criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
 
     
-    lr = trial.suggest_loguniform('lr', 1e-5,1e-1)
-    wd = trial.suggest_loguniform('wd', 1e-9,1e-1)
+    lr = trial.suggest_float('lr', 1e-5,1e-1)
+    wd = trial.suggest_float('wd', 1e-9,1e-1)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
 
     model.to(device=device)
+    
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=n_CPU)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=n_CPU)
 
     for epoch in range(epochs):
-        train_loss = train(model,optimizer,criterion)
-        valid_loss = eval(model,criterion)
+        print(epoch, flush= True)
+        train_loss = train(model,optimizer,criterion, train_loader)
+        valid_loss = eval(model,criterion, valid_loader)
+
+    # Save the output data in a file
+    # This can be changed to test_loader when doing the final test
+    eval(model,criterion, valid_loader, save = True, hyperparameters = [n_layers, n_units, lr, wd, r_link])
 
     return valid_loss
 
 storage = "sqlite:///example_all.db"
-study = optuna.create_study(study_name="all_sim_small", direction='minimize', storage=storage)
-study.optimize(objective, n_trials=100)
+study = optuna.create_study(study_name="bTest", direction='minimize', storage=storage, load_if_exists= True)
+study.optimize(objective, n_trials=1)
 
 #pruned_trials = [t for t in study.trials if t.state == optuna.structs.TrialState.PRUNED]
 #complete_trials = [t for t in study.trials if t.state == optuna.structs.TrialState.COMPLETE]
