@@ -19,9 +19,8 @@ import optuna
 
 from load_data_mass import training_set, validation_set, test_set, n_CPU
 
-# from accelerate import Accelerator
-
-# accelerator = Accelerator()
+from accelerate import Accelerator
+accelerator = Accelerator()
 
 
 min_valid_loss = 1e7                       #set this to a large number. Used to compute
@@ -129,8 +128,8 @@ class GNN(nn.Module):
         self.dim_out = dim_out
         # Number of input node features = 12
         node_in = node_features
-        edge_in = 1
-        edge_out = 1
+        edge_in = 3
+        edge_out = 3
         global_in = u_dim
         node_out = node_features 
         hidden_dim = hidden_dim
@@ -176,7 +175,7 @@ def train(model,optimizer,criterion, train_loader = None):
   train_loss = 0.0
   model.train()
   
-#   model, optimizer, training_dataloader = accelerator.prepare(model, optimizer, train_loader)
+  model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
   
   for data in train_loader:# Iterate in batches over the training dataset.
     data.to(device)
@@ -186,8 +185,8 @@ def train(model,optimizer,criterion, train_loader = None):
     y_target = torch.reshape(y_target, (data.num_graphs, 1))
     loss = criterion(out, y_target)
 
-    loss.backward()  # Derive gradients.
-    # accelerator.backward(loss)
+    # loss.backward()  # Derive gradients.
+    accelerator.backward(loss)
     optimizer.step()  # Update parameters based on gradients.
     train_loss += loss.item()
   last_loss = train_loss/len(train_loader)
@@ -243,12 +242,12 @@ def objective(trial):
     #suggest values in the number of neurons
     n_units = trial.suggest_int('n_units',64,128)
 
-    model = GNN(u_dim = u_dim, node_features = 12, n_layers = n_layers, hidden_dim = n_units, dim_out = 1)
+    model = GNN(u_dim = u_dim, node_features = 14, n_layers = n_layers, hidden_dim = n_units, dim_out = 1)
 
     criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
 
     
-    lr = trial.suggest_float('lr', 1e-5,1e-1)
+    lr = trial.suggest_float('lr', 1e-8,1e-3)
     wd = trial.suggest_float('wd', 1e-9,1e-1)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
 
