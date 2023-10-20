@@ -19,8 +19,7 @@ import optuna
 
 from load_data_mass import training_set, validation_set, test_set, n_CPU
 
-from accelerate import Accelerator
-accelerator = Accelerator()
+import matplotlib.pyplot as plt
 
 
 min_valid_loss = 1e7                       #set this to a large number. Used to compute
@@ -30,7 +29,7 @@ batch_size     = 8                        #number of elements each batch contain
 #lr             = 1e-5                      #value of the learning rate. Hyper-parameter
 #wd             = 0.0                       #value of the weight decay. Hyper-parameter
 dr             = 0.0                       #dropout rate. Hyper-parameter
-epochs         = 1                       #number of epochs to train the network. Hyper-parameter
+epochs         = 200                       #number of epochs to train the network. Hyper-parameter
 
 #name of the model
 #f_model = 'model_mass_300.pt'
@@ -49,7 +48,6 @@ else:
     device = torch.device('cpu')
 
 
-print('reading data')
 #load the dataset
 # train_dataset = torch.load('masswdm_train_menos10_all.pt')
 # valid_dataset = torch.load('masswdm_valid_menos10_all.pt')
@@ -73,6 +71,8 @@ class EdgeModel(nn.Module):
 
         layers = [Linear(node_in*2 + edge_in, hidden_dim),
                   ReLU(),
+                  Linear(hidden_dim, hidden_dim),
+                  ReLU(),
                   Linear(hidden_dim, edge_out)]
 
         self.edge_mlp = Sequential(*layers)
@@ -95,6 +95,8 @@ class NodeModel(nn.Module):
         super().__init__()
 
         layers = [Linear(node_in + 3*edge_in + global_in, hidden_dim),
+                  ReLU(),
+                  Linear(hidden_dim, hidden_dim),
                   ReLU(),
                   Linear(hidden_dim, node_out)]
 
@@ -171,11 +173,9 @@ class GNN(nn.Module):
 
         return out
 
-def train(model,optimizer,criterion, train_loader = None):
+def train(model,optimizer,scheduler,criterion, train_loader = None):
   train_loss = 0.0
   model.train()
-  
-  model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
   
   for data in train_loader:# Iterate in batches over the training dataset.
     data.to(device)
@@ -185,9 +185,9 @@ def train(model,optimizer,criterion, train_loader = None):
     y_target = torch.reshape(y_target, (data.num_graphs, 1))
     loss = criterion(out, y_target)
 
-    # loss.backward()  # Derive gradients.
-    accelerator.backward(loss)
+    loss.backward()  # Derive gradients.
     optimizer.step()  # Update parameters based on gradients.
+    scheduler.step()
     train_loss += loss.item()
   last_loss = train_loss/len(train_loader)
   #print('Training loss =', last_loss)
@@ -214,8 +214,9 @@ def eval(model,criterion, valid_loader = None, save = False, hyperparameters = [
   #print('test loss =', val_loss)
   if save:
     with open('outputs/' + name_model(hyperparameters) + ".npy", 'wb') as f:
-        np.save(f, predicted)
-        np.save(f, true)
+        print(predicted)
+        print(true)
+        np.save(f, [predicted, true])
     
     torch.save(model.state_dict(), "models/" + name_model(hyperparameters))
         
@@ -249,7 +250,9 @@ def objective(trial):
     
     lr = trial.suggest_float('lr', 1e-8,1e-3)
     wd = trial.suggest_float('wd', 1e-9,1e-1)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
+    scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=1.e-1, cycle_momentum=False)
 
     model.to(device=device)
     
@@ -257,20 +260,34 @@ def objective(trial):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=n_CPU)
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True, num_workers=n_CPU)
 
+    trainLoss_history = []
+    validLoss_history = []
+
     for epoch in range(epochs):
         print(epoch, flush= True)
-        train_loss = train(model,optimizer,criterion, train_loader)
+        train_loss = train(model,optimizer,scheduler,criterion, train_loader)
         valid_loss = eval(model,criterion, valid_loader)
+
+        trainLoss_history.append(train_loss)
+        validLoss_history.append(valid_loss)
 
     # Save the output data in a file
     # This can be changed to test_loader when doing the final test
     eval(model,criterion, valid_loader, save = True, hyperparameters = [n_layers, n_units, lr, wd, r_link])
 
+    plt.clf()
+    plt.plot(trainLoss_history, label='train_loss')
+    plt.plot(validLoss_history,label='val_loss')
+    plt.legend()
+    plt.show()
+    plt.savefig("losses/" + name_model([n_layers, n_units, lr, wd, r_link]) + ".png")
+    plt.close()
+
     return valid_loss
 
 storage = "sqlite:///example_all.db"
-study = optuna.create_study(study_name="bTest", direction='minimize', storage=storage, load_if_exists= True)
-study.optimize(objective, n_trials=1)
+study = optuna.create_study(study_name="Run1", direction='minimize', storage=storage, load_if_exists= True)
+study.optimize(objective, n_trials=50)
 
 #pruned_trials = [t for t in study.trials if t.state == optuna.structs.TrialState.PRUNED]
 #complete_trials = [t for t in study.trials if t.state == optuna.structs.TrialState.COMPLETE]

@@ -14,14 +14,14 @@ from torch_geometric.loader import DataLoader
 from multiprocessing import Pool
 import scipy.spatial as SS
 
-n_CPU = 31
+n_CPU = 10
 
 #number of star threshold
 Nstar_th = 5
 
 #Use cosmological parameters as global features
-global_parameters = False
-cosmo_parameters = True  #use only cosmological parameters
+global_parameters = True
+cosmo_parameters = False  #use only cosmological parameters
 astro_parameters = False #use only astrophysical parameters
 
 #in this case I'm creating a training dataset and a validation dataset splitting the simulations
