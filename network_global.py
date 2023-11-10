@@ -42,10 +42,10 @@ epochs         = 100                       #number of epochs to train the networ
 #n_units=88
 
 #name of the model
-f_model = 'model_mass_best_all.pt'
+f_model = 'model_mass_new_features_sigma8.pt'
 
 #name of the loss 
-name_loss = 'mass_loss_best_all'
+name_loss = 'mass_loss_new_features_sigma8'
 
 torch.manual_seed(12345)
 #data_list = data_list.shuffle() #no le hice un shuffle inicial en la data
@@ -60,8 +60,8 @@ else:
 
 print('reading data')
 #load the dataset
-train_dataset = torch.load('masswdm_train_menos10_all.pt')
-valid_dataset = torch.load('masswdm_valid_menos10_all.pt')
+train_dataset = torch.load('masswdm_train_menos10_new_sigma8.pt')
+valid_dataset = torch.load('masswdm_valid_menos10_new_sigma8.pt')
 
 u = train_dataset[0].u
 u_dim = u.shape[1]
@@ -189,7 +189,7 @@ class GNN(nn.Module):
         return out
     
 #las node features son 10
-model = GNN(u_dim = u_dim, node_features = 12, n_layers = n_layers, hidden_dim = n_units, dim_out = 1)
+model = GNN(u_dim = u_dim, node_features = 14, n_layers = n_layers, hidden_dim = n_units, dim_out = 1)
 criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
 optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=wd)
 

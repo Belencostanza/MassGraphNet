@@ -31,9 +31,9 @@ split_valid = 870 #500 to 700 simulations for validation
 split_test = nsim #700 to 750 simulations for testing
 
 #name of the dataset 
-name_train = 'masswdm_train_menos10_new_onlycosmo.pt'
-name_valid = 'masswdm_valid_menos10_new_onlycosmo.pt'
-name_test = 'masswdm_test_menos10_new_onlycosmo.pt'
+name_train = 'masswdm_train_menos10_new_sigma8.pt'
+name_valid = 'masswdm_valid_menos10_new_sigma8.pt'
+name_test = 'masswdm_test_menos10_new_sigma8.pt'
 
 #--------------------------------------------------------------------------------------------------------
 
@@ -271,18 +271,17 @@ def create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters):
             edge_attr = torch.zeros((index_edge.shape[1], 1)) #shape=[number of edges, features=0]
             
             u_number = np.log10(n_sub).reshape(1,1) #number of subhalos in the simulation as a global feature
-            #print(np.shape(u_number))           
 
             if global_parameters == True:
                 u_parameters = parameters.reshape(1,5)
                 u = np.concatenate((u_number, u_parameters), axis=1)
             elif cosmo_parameters == True:
-                parameters = parameters[0:2]
-                u_parameters = parameters.reshape(1,2)
+                u_parameters = parameters[1:2]
+                u_parameters = u_parameters.reshape(1,1)
                 u = np.concatenate((u_number, u_parameters), axis=1)
             elif astro_parameters == True:
-                parameters = parameters[2:]
-                u_parameters = parameters.reshape(1,3) #me parece que aca falta un parametro
+                u_parameters = parameters[2:5]
+                u_parameters = u_parameters.reshape(1,3) #me parece que aca falta un parametro
                 u = np.concatenate((u_number, u_parameters), axis=1)
             else:
                 u = u_number
