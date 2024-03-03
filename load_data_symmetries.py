@@ -1,6 +1,7 @@
 import os
 import torch
 
+
 os.environ['TORCH'] = torch.__version__
 print(torch.__version__)
 
@@ -14,7 +15,20 @@ from torch_geometric.loader import DataLoader
 from multiprocessing import Pool
 import scipy.spatial as SS
 
-n_CPU = 10
+import sys
+
+
+device = ""
+
+if torch.cuda.is_available():
+    print("CUDA Available")
+    device = torch.device('cuda:'+ sys.argv[1])
+else:
+    print('CUDA Not Available')
+    device = torch.device('cpu')
+
+
+n_CPU = 20
 
 #number of star threshold
 Nstars_th = 1
@@ -25,8 +39,8 @@ cosmo_parameters = True  #use only cosmological parameters
 astro_parameters = False #use only astrophysical parameters
 
 #in this case I'm creating a training dataset and a validation dataset splitting the simulations
-#simpathroot = '/mnt/home/bwang/MassGraphNet/data'
-simpathroot = '/data/bcostanza/data'
+simpathroot = '/mnt/home/bwang/MassGraphNet/data'
+# simpathroot = '/data/bcostanza/data'
 nsim = 1024
 
 #nhalos = 20 #number of haloes per simulation
@@ -34,6 +48,9 @@ nsim = 1024
 split_train = 720  #0 to 500 simulations for training
 split_valid = 870 #500 to 700 simulations for validation
 split_test = nsim #700 to 750 simulations for testing
+
+# study_name = "NF2.0DeepSetNoVMBH"
+study_name = "NF2.0DeepSetTest"
 
 #name of the dataset 
 #name_train = 'masswdm_train_menos10_all_bonny.pt'
@@ -259,13 +276,15 @@ def features_new_v2(fin):
     #14. J spin modulo
     #15,16,17 photometric bands (remove this)
     #18. SFR
-    #tab = np.column_stack((HaloID, Pos_subhalo, Mstar, Mbh, Mg, Mtot, Rstar, Rtot, Rvmax, GMetal, SMetal, Vmax, Vdisp, V, J, SFR))
-    tab = np.column_stack((HaloID, Pos_subhalo, Nstars, Mstar, Mbh, Mg, Mtot, Rstar, Rtot, Rvmax, GMetal, SMetal, Vmax, Vdisp, V, J, SFR))
+    # tab = np.column_stack((HaloID, Pos_subhalo, Mstar, Mg, Rstar, GMetal, SMetal, Vmax))
+    tab = np.column_stack((HaloID, Pos_subhalo, Mstar, Mbh, Mg, Mtot, Rstar, Rtot, Rvmax, GMetal, SMetal, Vmax, Vdisp, V, J, SFR))
+    # tab = np.column_stack((HaloID, Pos_subhalo, Mstar, Mg, Mtot, Rstar, Rtot, Rvmax, GMetal, SMetal, SFR))
+    # tab = np.column_stack((HaloID, Pos_subhalo, Nstars, Mstar, Mbh, Mg, Mtot, Rstar, Rtot, Rvmax, GMetal, SMetal, Vmax, Vdisp, V, J, SFR))
     
     # if you want condition in the number of stars uncomment these and comment the "tab" above
-    #tab = tab[tab[:,4]>Nstars_th] # restrict to subhalos with stars
+    # tab = tab[tab[:,4]>Nstars_th] # restrict to subhalos with stars
     # Once restricted to a minimum number of stellar particles, remove this feature since it is not observable
-    #tab = np.delete(tab, 4, 1)
+    # tab = np.delete(tab, 4, 1)
 
 
     #tab_features = np.column_stack((Mstar,Rstar,Mdm,Metal))
@@ -294,31 +313,19 @@ def create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters, r_lin
             tab_halo = tab[tab[:,0]==ind][:,1:]  #select subhalos within a halo with index id (graph por halo)
             tab_features = tab_halo[:,3:]
             
-            #tab_halo[:,0:3] -= GroupPos[ind]  #in the halo frame
             #tab_halo[:,-3:] -= GroupVel[ind]  
-            
-            #distance = euclidean_distance(n_sub, torch.Tensor(tab_halo[:,0:3])) 
-            #index_mask = (distance > 0) & (distance < r_link)
-            #index_edge = np.array(np.where(index_mask == True))
-            #index_edge = torch.tensor(index_edge, dtype=torch.long)
-            
-            #edge_attr = torch.zeros((index_edge.shape[1], 1)) #shape=[number of edges, features=0]
-            # TODO: double check if use_loops 
+                        
             index_edge, edge_attr = get_edges(tab_halo[:,0:3], r_link, use_loops=True)
             
             u_number = np.log10(n_sub).reshape(1,1) #number of subhalos in the simulation as a global feature
-            #print(np.shape(u_number))           
 
             if global_parameters == True:
                 u_parameters = parameters.reshape(1,5)
-                #print(np.shape(u_parameters))
                 u = np.concatenate((u_number, u_parameters), axis=1)
             elif cosmo_parameters == True:   #esto hay que cambiar
                 u_parameters = parameters[0:1]
                 u_parameters = u_parameters.reshape(1,1)
                 u = np.concatenate((u_number, u_parameters), axis=1)
-                #u = u_parameters
-                #u = np.concatenate((u_number, u_parameters), axis=1)
             elif astro_parameters == True:
                 u_parameters = parameters[2:]
                 u_parameters = u_parameters.reshape(1,3) #me parece que aca falta un parametro
@@ -328,15 +335,16 @@ def create_graphs_new(halolist, tab, GroupPos, GroupVel, mwdm, parameters, r_lin
                 
             mass = torch.tensor(mwdm, dtype=torch.float32) #target
             
-            data = Data(x=torch.Tensor(tab_features), u = torch.tensor(u, dtype=torch.float32), edge_index = torch.tensor(index_edge,  dtype=torch.long), edge_attr = torch.tensor(edge_attr, dtype=torch.float32), y=mass)
+            data = Data(x=torch.Tensor(tab_features), u = torch.tensor(u, dtype=torch.float32), edge_index = torch.tensor(index_edge,  dtype=torch.long), edge_attr = torch.tensor(edge_attr, dtype=torch.float32), y=mass, note = tab_features.shape[0])
+
             data_sim.append(data)
             
     return data_sim
 
 #-------------------------------------------------------------------------------------------------------------------------------
 
-#mass_sim = np.loadtxt('/mnt/home/bwang/MassGraphNet/data/sobol_sequence_WDM_real_values.txt')
-mass_sim = np.loadtxt('/home/bcostanza/MachineLearning/project/sobol_sequence_WDM_real_values.txt')
+mass_sim = np.loadtxt('/mnt/home/bwang/MassGraphNet/data/sobol_sequence_WDM_real_values.txt')
+# mass_sim = np.loadtxt('/home/bcostanza/MachineLearning/project/sobol_sequence_WDM_real_values.txt')
 
 #read the data
 def create_start_end_indexes(start, end, number):
@@ -352,10 +360,10 @@ def create_start_end_indexes(start, end, number):
 
 def create_ranged_graphs(index_start, index_end, r_link = 1e-2):
     
-    print("Creating ranged graphs", flush = True)
+    # print("Creating ranged graphs", flush = True)
     dataset = []
     for i in range(index_start, index_end):
-        print('reading simulation', i, flush = True)
+        # print('reading simulation', i, flush = True)
         fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
         
         tab, GroupPos, GroupVel, indexes = features_new_v2(fin)
@@ -371,8 +379,8 @@ def create_ranged_graphs(index_start, index_end, r_link = 1e-2):
 
     # Save the data to avoid too many file descriptor and receive 0 item issue
 
-    torch.save(dataset, "./prepared_data/dataset_%d_%d.pt"%(index_start, index_end))
-    print("finished saving dataset_%d_%d.pt"%(index_start, index_end), flush = True)
+    torch.save(dataset, "./prepared_data/dataset_%d_%d_%s_%s.pt"%(index_start, index_end, study_name, sys.argv[1]))
+    # print("finished saving dataset_%d_%d.pt"%(index_start, index_end), flush = True)
     
 
 
@@ -380,8 +388,6 @@ def training_set(r_link = 1e-1):
     dataset_train = []
     start_indexes, end_indexes = create_start_end_indexes(0, split_train, n_CPU)
     
-    print(start_indexes, flush = True)
-    print(end_indexes, flush = True)
         
     with Pool(start_indexes.shape[0]) as p:
         p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], r_link) for i in range(start_indexes.shape[0])])
@@ -389,7 +395,7 @@ def training_set(r_link = 1e-1):
     print("finished training set multiprocessing part")
 
     for i in range(start_indexes.shape[0]):
-        dataset_train += torch.load("./prepared_data/dataset_%d_%d.pt"%(start_indexes[i], end_indexes[i]))
+        dataset_train += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
     
     return dataset_train
     
@@ -397,15 +403,11 @@ def validation_set(r_link = 1e-1):
     dataset_valid = []
     start_indexes, end_indexes = create_start_end_indexes(split_train, split_valid, n_CPU)
     
-    print(start_indexes, flush = True)
-    print(end_indexes, flush = True)
-    print(start_indexes.shape[0], flush = True)
-    
     with Pool(start_indexes.shape[0]) as p:
         p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], r_link) for i in range(start_indexes.shape[0])])
         
     for i in range(start_indexes.shape[0]):
-        dataset_valid += torch.load("./prepared_data/dataset_%d_%d.pt"%(start_indexes[i], end_indexes[i]))
+        dataset_valid += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
 
     return dataset_valid
 
@@ -420,7 +422,7 @@ def test_set(r_link = 1e-1):
         p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], r_link) for i in range(start_indexes.shape[0])])
 
     for i in range(start_indexes.shape[0]):
-        dataset_test += torch.load("./prepared_data/dataset_%d_%d.pt"%(start_indexes[i], end_indexes[i]))
+        dataset_test += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
     
     return dataset_test
 
@@ -429,13 +431,13 @@ if __name__ == "__main__":
     print('reading')
 
     train_dataset = training_set()
-    torch.save(train_dataset, name_train)
+    # torch.save(train_dataset, name_train)
 
     valid_dataset = validation_set()
-    torch.save(valid_dataset, name_valid)
+    # torch.save(valid_dataset, name_valid)
         
     test_dataset = test_set()
-    torch.save(test_dataset, name_test)
+    # torch.save(test_dataset, name_test)
 
 
 

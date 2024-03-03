@@ -18,39 +18,21 @@ from torch_geometric.loader import DataLoader
 from NFScripts.archi import createAchi, create_condDist
 
 import optuna
+import sys
 
-from load_data_symmetries import training_set, validation_set, test_set, n_CPU
+from load_data_symmetries import training_set, validation_set, test_set, n_CPU, device, study_name
 
-#import matplotlib.pyplot as plt
 
 
 min_valid_loss = 1000                       #set this to a large number. Used to compute
 
-batch_size     = 32                        #number of elements each batch contains. Hyper-parameter
+batch_size     = 256                        #number of elements each batch contains. Hyper-parameter
 dr             = 0.0                       #dropout rate. Hyper-parameter
-epochs         = 100                       #number of epochs to train the network. Hyper-parameter
+epochs         = 5                       #number of epochs to train the network. Hyper-parameter
 
-#name of the model
-#f_model = 'model_mass_300.pt'
 
-#name of the loss 
-#name_loss = 'mass_loss_300'
 
 torch.manual_seed(12345)
-
-
-if torch.cuda.is_available():
-    print("CUDA Available")
-    device = torch.device('cuda')
-else:
-    print('CUDA Not Available')
-    device = torch.device('cpu')
-
-
-#load the dataset
-#train_dataset = torch.load('masswdm_train_menos10_all_bonny.pt')
-#valid_dataset = torch.load('masswdm_valid_menos10_all_bonny.pt')
-
 
 
 #Neural network based on CosmoGraphNet to predict the WDM mass of the graphs 
@@ -92,7 +74,8 @@ class NodeModel(nn.Module):
         self.residuals = residuals
         self.norm = norm
 
-        layers = [Linear(node_in + 3*edge_out + global_in, hidden_channels),
+        # layers = [Linear(node_in + 3*edge_out + global_in, hidden_channels),
+        layers = [Linear(node_in + global_in, hidden_channels),
                   ReLU(),
                   Linear(hidden_channels, node_out)]
         if self.norm:  layers.append(LayerNorm(node_out))
@@ -107,15 +90,15 @@ class NodeModel(nn.Module):
         # u: [B, F_u]
         # batch: [N] with max entry B - 1.
 
-        row, col = edge_index
-        out = edge_attr
+        # row, col = edge_index
+        # out = edge_attr
 
-        # Multipooling layer
-        out1 = scatter_add(out, col, dim=0, dim_size=x.size(0))
-        out2 = scatter_max(out, col, dim=0, dim_size=x.size(0))[0]
-        out3 = scatter_mean(out, col, dim=0, dim_size=x.size(0))
+        # # Multipooling layer
+        # out1 = scatter_add(out, col, dim=0, dim_size=x.size(0))
+        # out2 = scatter_max(out, col, dim=0, dim_size=x.size(0))[0]
+        # out3 = scatter_mean(out, col, dim=0, dim_size=x.size(0))
         
-        out = torch.cat([x, out1, out2, out3, u[batch]], dim=1)
+        out = torch.cat([x, u[batch]], dim=1)
 
         out = self.node_mlp(out)
         if self.residuals:
@@ -144,8 +127,9 @@ class GNN(nn.Module):
         #encoder graph block
         layers = []
 
-        inlayer = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=False),
-                            edge_model=EdgeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=False))
+        inlayer = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=False))
+        # inlayer = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=False),
+        #                     edge_model=EdgeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=False))
 
         layers.append(inlayer)
 
@@ -155,8 +139,8 @@ class GNN(nn.Module):
         #hidden graph block
         #layers = []
         for i in range(n_layers-1):
-            lay = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=residuals),
-                            edge_model=EdgeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=residuals))
+            lay = MetaLayer(node_model=NodeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=residuals))
+                            # edge_model=EdgeModel(node_in, node_out, edge_in, edge_out, hidden_channels, global_in, residuals=residuals))
             layers.append(lay)
 
         self.layers = ModuleList(layers)
@@ -201,11 +185,7 @@ def train(dist_x2_given_x1, model,optimizer,criterion,scheduler, train_loader = 
     y_target = data.y 
     y_target = torch.reshape(y_target, (data.num_graphs, 1))
     
-    # loss_mse = criterion(out, y_target)
-    # loss = torch.log(loss_mse) #probamos poniendo log
-    # #################################################
-    # print(f"out: {out}", flush = True)
-    # print(f"target: {y_target}", flush = True)
+    
     out = torch.nan_to_num(out)
     ln_p_x2_given_x1 = dist_x2_given_x1.condition(out).log_prob(y_target)
     loss = -(ln_p_x2_given_x1).mean()
@@ -213,6 +193,7 @@ def train(dist_x2_given_x1, model,optimizer,criterion,scheduler, train_loader = 
     loss.backward()  # Derive gradients.
     optimizer.step()  # Update parameters based on gradients.
     scheduler.step()
+    # print(scheduler.get_last_lr(), flush=True)
     train_loss += loss.item()
   last_loss = train_loss/len(train_loader)
   
@@ -231,26 +212,16 @@ def eval(dist_x2_given_x1, model,criterion, valid_loader = None, save = False, h
         y_target = data.y
         y_target = torch.reshape(y_target, (data.num_graphs, 1))
     
-        # loss_mse = criterion(out, y_target)
-        # loss = torch.log(loss_mse)
+        
         out = torch.nan_to_num(out)
         ln_p_x2_given_x1 = dist_x2_given_x1.condition(out).log_prob(y_target)
         loss = -(ln_p_x2_given_x1).mean()
     
         valid_loss += loss.item()
-
-    # if save:
-    #     predicted = np.append(predicted, out.detach().cpu().numpy())
-    #     true = np.append(true, y_target.detach().cpu().numpy())
   
   val_loss = valid_loss/len(valid_loader)
 
   if save:
-    # with open('outputs/' + name_model(hyperparameters) + ".npy", 'wb') as f:
-    #     print(predicted)
-    #     print(true)
-    #     np.save(f, [predicted, true])
-    
     fmodel = "models/"
     torch.save(model.state_dict(), "models/" + name_model(hyperparameters))
     
@@ -263,7 +234,6 @@ def name_model(hyperparameters):
 #define an objective function to be minimized by the loss function
 def objective(trial):
     # Create the dataset based on the link 
-    #r_link = trial.suggest_float('r_link', 1e-3, 2e-1)
     r_link = trial.suggest_float("r_link", 1.e-4, 1.e-2, log=True)
     train_dataset = training_set(r_link)
     valid_dataset = validation_set(r_link)
@@ -271,25 +241,22 @@ def objective(trial):
     u = train_dataset[0].u
     u_dim = u.shape[1]
 
-    #print('finish')
-    
-    
     #suggest values in the number of layers
     n_layers = trial.suggest_int('n_layers',1,5)
     #suggest values in the number of neurons
-    #n_units = trial.suggest_int('n_units',64,128)
     n_units = trial.suggest_categorical("n_units", [64, 128, 256, 512])
 
     NFHyper = suggest_NF_Hyper_Parameters(trial)
     
-    latent_dim = 8
-    model = GNN(u_dim = u_dim, node_features = 15, n_layers = n_layers, hidden_dim = n_units, dim_out = latent_dim, residuals=True)
+    latent_dim = 64
+    # model = GNN(u_dim = u_dim, node_features = 9, n_layers = n_layers, hidden_dim = n_units, dim_out = latent_dim, residuals=True)
+    model = GNN(u_dim = u_dim, node_features = 14, n_layers = n_layers, hidden_dim = n_units, dim_out = latent_dim, residuals=True)
     
     
-    
+    # This will no longer be used in the NF model
     criterion = nn.MSELoss()  #loss function. In this case MSE (mean squared error)
     
-    lr = trial.suggest_float('lr', 1e-9,1e-5, log=True)
+    lr = trial.suggest_float('lr', 1e-8,1e-5, log=True)
     #lr = trial.suggest_float('lr', 1e-5,1e-1)
     wd = trial.suggest_float('wd', 1e-9,1e-6, log=True)
     
@@ -300,7 +267,7 @@ def objective(trial):
     combined_parameters = list(model.parameters()) + list(modules.parameters())
     
     optimizer = torch.optim.Adam(combined_parameters, lr=lr, betas=(0.5, 0.999), weight_decay=wd)
-    scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=1.e-3, cycle_momentum=False, step_size_up=500)
+    scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=lr, max_lr=1.e-4, cycle_momentum=False, step_size_up=1000)
 
     model.to(device=device)   
 
@@ -329,17 +296,10 @@ def objective(trial):
     eval(dist_x2_given_x1 ,model,criterion, valid_loader, save = True, hyperparameters = [n_layers, n_units, lr, wd, r_link])
    
     fmodel = "models/"
-    torch.save(dist_x2_given_x1, fmodel+f"dist_x2_given_x1_{trial.number}.pt")
-    torch.save(modules, fmodel+f"modules_{trial.number}.pt")
-    torch.save(modules.state_dict(), fmodel+f"modules_state_dict_{trial.number}.pt")
-
-    #plt.clf()
-    #plt.plot(trainLoss_history, label='train_loss')
-    #plt.plot(validLoss_history,label='val_loss')
-    #plt.legend()
-    #plt.show()
-    #plt.savefig("losses/" + name_model([n_layers, n_units, lr, wd]) + ".png")
-    #plt.close()
+    torch.save(dist_x2_given_x1, fmodel+f"dist_x2_given_x1_{trial.number}_{study_name}.pt")
+    torch.save(modules, fmodel+f"modules_{trial.number}_{study_name}.pt")
+    torch.save(modules.state_dict(), fmodel+f"modules_state_dict_{trial.number}_{study_name}.pt")
+    
     np.savez("losses/" + name_model([n_layers, n_units, lr, wd, r_link]), trainLoss_history, validLoss_history)
 
     return valid_loss
@@ -348,11 +308,9 @@ def suggest_NF_Hyper_Parameters(trial):
     condition_layers = trial.suggest_int("condition_layers", 1,15)
     count_bins = trial.suggest_int("NFcount_bins", 4, 256)
     
-    # TODO:To choose from a list
-    hidden = trial.suggest_int("NFhidden_dims", 0, 4)
 
-    dim_options = [16,32,64,128,256]
-    hidden_dims = [dim_options[hidden],dim_options[hidden]]
+    dim_options = trial.suggest_categorical("dim_options", [64, 128, 256])
+    hidden_dims = [dim_options,dim_options]
     
     
     return [condition_layers, count_bins, hidden_dims]
@@ -371,8 +329,8 @@ def createNFAchi( hyperparameters, lr, wd,target_dimention, context_dimension):
     
 if __name__ == '__main__':
         
-    storage = "sqlite:///NF1.0.db"
-    study = optuna.create_study(study_name="NF1.0", direction='minimize', storage=storage, load_if_exists= True)
+    storage = f"sqlite:///{study_name}.db"
+    study = optuna.create_study(study_name=study_name, direction='minimize', storage=storage, load_if_exists= True)
     study.optimize(objective, n_trials=50)
 
     print("Study statistics: ")
