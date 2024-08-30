@@ -28,7 +28,7 @@ else:
     device = torch.device('cpu')
 
 
-n_CPU = 20
+n_CPU = 10
 
 
 #in this case I'm creating a training dataset and a validation dataset splitting the simulations
@@ -44,7 +44,7 @@ split_test = nsim #700 to 750 simulations for testing
 
 
 #study_name = "BlackHoleDF4TO10"
-study_name = "BlackHoleDFALLhalos_newcond"
+study_name = "BlackHoleDFALLhalos_norm_global"
 
 
 def correct_boundary(pos, boxlength=1.):
@@ -64,7 +64,7 @@ def euclidean_distance(n_sub,position):
               distance[k,j] = torch.cdist(position[k].unsqueeze(0), position[j].unsqueeze(0), p=2)
     return distance
 
-def features_new_v2(fin):
+def features_new_v2(fin, mean=0., std=1., norm=False):
 
     f = h5py.File(fin, 'r')
 
@@ -82,21 +82,39 @@ def features_new_v2(fin):
     f.close()
 
     Mbh = np.log10(1.+Mbh)
-    Mbh = normalize(Mbh)    
+    #Mbh = normalize(Mbh) #quitamos normalizacion por simulación
+    mean_mbh, std_mbh = normalize(Mbh)
+    if norm==True: 
+        Mbh = (Mbh - mean)/std
+
 
     tab = np.column_stack((HaloID,Mbh))
 
     indexes = np.argwhere(HaloMass>0.).reshape(-1) #haloes index in the given simulation
 
-    return tab, indexes
+    return tab, indexes, mean_mbh, std_mbh
  
 def normalize(variable):
     mean, std = variable.mean(axis=0), variable.std(axis=0)
-    norm_variable = (variable - mean)/std
-    return norm_variable
-    
+    #norm_variable = (variable - mean)/std
+    return mean, std
 
-def create_graphs_new(halolist, tab, mwdm, parameters):
+def variables(halolist, tab):
+    all_features = []
+    for ind in halolist:
+        n_sub = len(tab[tab[:,0]==ind])
+        #num_sub.append(n_sub)
+
+        #if n_sub < 10 and n_sub > 4:
+        if n_sub > 4: # if you want to run the condition of more than 4 subhalos uncomment this and comment the condition above
+            tab_halo = tab[tab[:,0]==ind][:,1:]  #select subhalos within a halo with index id (graph por halo)
+            tab_features = tab_halo[:,:] #(nsub, features)
+            all_features.append(tab_features)
+
+    return all_features
+
+    
+def create_graphs_new(halolist, tab, mwdm, parameters, mean_mbh, std_mbh):
     
     all_tab_features = []
     for ind in halolist: 
@@ -111,7 +129,10 @@ def create_graphs_new(halolist, tab, mwdm, parameters):
 
                         
     u_parameters = parameters[0:1]
-    u = u_parameters.reshape(1,1)
+    u_parameters = u_parameters.reshape(1,1)
+    u_mean = mean_mbh.reshape(1,1)
+    u_std = std_mbh.reshape(1,1)
+    u = np.concatenate((u_parameters, u_mean, u_std), axis=1)
                          
     mass = torch.tensor(mwdm, dtype=torch.float32) #target
             
@@ -138,7 +159,7 @@ def create_start_end_indexes(start, end, number):
     
     return start_indexes, end_indexes
 
-def create_ranged_graphs(index_start, index_end, r_link = 1e-2):
+def create_ranged_graphs(index_start, index_end, mean, std, r_link = 1e-2):
     
     # print("Creating ranged graphs", flush = True)
     dataset = []
@@ -146,70 +167,109 @@ def create_ranged_graphs(index_start, index_end, r_link = 1e-2):
         # print('reading simulation', i, flush = True)
         fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
         
-        tab, indexes = features_new_v2(fin)
+        tab, indexes, mean_mbh, std_mbh = features_new_v2(fin, mean, std, norm=True)
         
         mwdm = mass_sim[i,-1]        
         parameters = mass_sim[i,:-1]  #other parameters of the simulation
     
         halolist = indexes#[:nhalos]
     
-        data_sim = create_graphs_new(halolist, tab, mwdm, parameters)
+        data_sim = create_graphs_new(halolist, tab, mwdm, parameters, mean_mbh, std_mbh)
     
         dataset += data_sim
 
     # Save the data to avoid too many file descriptor and receive 0 item issue
 
     #torch.save(dataset, "./prepared_data/dataset_%d_%d_%s_%s.pt"%(index_start, index_end, study_name, sys.argv[1]))
-    torch.save(dataset, "./prepared_data_newcond/dataset_%d_%d_%s.pt"%(index_start, index_end, study_name))
+    torch.save(dataset, "./prepared_data_norm_global/dataset_%d_%d_%s.pt"%(index_start, index_end, study_name))
 
     # print("finished saving dataset_%d_%d.pt"%(index_start, index_end), flush = True)
     
 
-
 def training_set(r_link = 1e-1):
+
+    features_all = []
+    for i in range(0,split_train):
+        #print('reading simulation', i)
+        fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
+        tab, indexes,_,_ = features_new_v2(fin)
+        variables_all = variables(indexes, tab)
+
+        features_all += variables_all
+
+    features_all = np.array(np.concatenate(features_all, axis=0))
+    mean = np.mean(features_all)
+    std = np.std(features_all)
+
     dataset_train = []
-    start_indexes, end_indexes = create_start_end_indexes(0, split_train, n_CPU)
-    
+    start_indexes, end_indexes = create_start_end_indexes(0, split_train, n_CPU)    
         
     with Pool(start_indexes.shape[0]) as p:
-        p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], r_link) for i in range(start_indexes.shape[0])])
+        p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], mean, std, r_link) for i in range(start_indexes.shape[0])])
     
     print("finished training set multiprocessing part")
 
     for i in range(start_indexes.shape[0]):
         #dataset_train += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
-        dataset_train += torch.load("./prepared_data_newcond/dataset_%d_%d_%s.pt"%(start_indexes[i], end_indexes[i], study_name))
-
+        dataset_train += torch.load("./prepared_data_norm_global/dataset_%d_%d_%s.pt"%(start_indexes[i], end_indexes[i], study_name))
     
     return dataset_train
     
 def validation_set(r_link = 1e-1):
+
+    features_all = []
+    for i in range(split_train,split_valid):
+        #print('reading simulation', i)
+        fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
+        tab, indexes,_,_ = features_new_v2(fin)
+        variables_all = variables(indexes, tab)
+
+        features_all += variables_all
+
+    features_all = np.array(np.concatenate(features_all, axis=0))
+    mean = np.mean(features_all)
+    std = np.std(features_all)
+
     dataset_valid = []
     start_indexes, end_indexes = create_start_end_indexes(split_train, split_valid, n_CPU)
     
     with Pool(start_indexes.shape[0]) as p:
-        p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], r_link) for i in range(start_indexes.shape[0])])
+        p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], mean, std, r_link) for i in range(start_indexes.shape[0])])
         
     for i in range(start_indexes.shape[0]):
         #dataset_valid += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
-        dataset_valid += torch.load("./prepared_data_newcond/dataset_%d_%d_%s.pt"%(start_indexes[i], end_indexes[i], study_name))
+        dataset_valid += torch.load("./prepared_data_norm_global/dataset_%d_%d_%s.pt"%(start_indexes[i], end_indexes[i], study_name))
 
 
     return dataset_valid
 
 def test_set(r_link = 1e-1):
+
+    features_all = []
+    for i in range(split_valid,split_test):
+        #print('reading simulation', i)
+        fin = '%s/WDM_%d/fof_subhalo_tab_090.hdf5'%(simpathroot,i)
+        tab, indexes,_,_ = features_new_v2(fin)
+        variables_all = variables(indexes, tab)
+
+        features_all += variables_all
+
+    features_all = np.array(np.concatenate(features_all, axis=0))
+    mean = np.mean(features_all)
+    std = np.std(features_all)
+
     dataset_test = []
     start_indexes, end_indexes = create_start_end_indexes(split_valid, split_test, n_CPU)
     
-    print(start_indexes, flush = True)
-    print(end_indexes, flush = True)
+    #print(start_indexes, flush = True)
+    #print(end_indexes, flush = True)
     
     with Pool(start_indexes.shape[0]) as p:
-        p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], r_link) for i in range(start_indexes.shape[0])])
+        p.starmap(create_ranged_graphs, [(start_indexes[i], end_indexes[i], mean, std, r_link) for i in range(start_indexes.shape[0])])
 
     for i in range(start_indexes.shape[0]):
         #dataset_test += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
-        dataset_test += torch.load("./prepared_data_newcond/dataset_%d_%d_%s.pt"%(start_indexes[i], end_indexes[i], study_name))
+        dataset_test += torch.load("./prepared_data_norm_global/dataset_%d_%d_%s.pt"%(start_indexes[i], end_indexes[i], study_name))
 
     
     return dataset_test
