@@ -11,6 +11,7 @@ import h5py
 from torch_geometric.data import Data
 import numpy as np
 from torch_geometric.loader import DataLoader
+from torch_geometric.transforms import NormalizeFeatures
 
 from multiprocessing import Pool
 import scipy.spatial as SS
@@ -28,11 +29,11 @@ else:
     device = torch.device('cpu')
 
 
-n_CPU = 20
+n_CPU = 4
 
 
 #in this case I'm creating a training dataset and a validation dataset splitting the simulations
-simpathroot = '/hildafs/projects/phy200026p/bwangc/MassGraphNet/data/users.flatironinstitute.org/~fvillaescusa/VOSS5'
+simpathroot = '/ocean/projects/phy240022p/bwangc/MassGraphNet/SimData'
 # simpathroot = '/data/bcostanza/data'
 nsim = 1024
 
@@ -44,7 +45,13 @@ split_test = nsim #700 to 750 simulations for testing
 
 
 #study_name = "BlackHoleDF4TO10"
-study_name = "BlackHoleDF"
+# study_name = "BlackHoleWithHaloMass"
+# study_name = "BlackHoleSR"
+study_name = "BlackHoleSR_Renormalize_NoMask"
+# study_name = "BlackHoleSR_Renormalize"
+
+Mbh_Mean = 0
+Mbh_Std = 1
 
 
 def correct_boundary(pos, boxlength=1.):
@@ -82,13 +89,17 @@ def features_new_v2(fin):
     f.close()
 
     Mbh = np.log10(1.+Mbh)
-    Mbh = normalize(Mbh)
-
+    # Mbh = normalize(Mbh)
     
+    HaloMass = np.log10(1.+HaloMass)
+    # HaloMass = normalize(HaloMass)
+    
+    indexes = np.argwhere(HaloMass>0.).reshape(-1) #haloes index in the given simulation
+
+    parentMass = np.ones(Mbh.shape)*HaloMass[HaloID]
 
     tab = np.column_stack((HaloID,Mbh))
-
-    indexes = np.argwhere(HaloMass>0.).reshape(-1) #haloes index in the given simulation
+    # tab = np.column_stack((HaloID,Mbh))
 
 
     return tab, indexes
@@ -106,14 +117,17 @@ def create_graphs_new(halolist, tab, mwdm, parameters):
     for ind in halolist: 
         n_sub = len(tab[tab[:,0]==ind])
         
-        #if n_sub < 10 and n_sub > 4:
+        # if n_sub > 4:
         tab_halo = tab[tab[:,0]==ind][:,1:]  #select subhalos within a halo with index id (graph por halo)
 
         tab_features = tab_halo[:, :] #features of the subhalos
         
         #tab_halo[:,-3:] -= GroupVel[ind] 
+        
         if tab_features.shape[0] != 0:
-            all_tab_features.append(tab_features[0]) 
+            all_tab_features += tab_features.tolist()
+                # all_tab_features.append(tab_features[0])
+            
                         
     u_parameters = parameters[0:1]
     u = u_parameters.reshape(1,1)
@@ -122,15 +136,15 @@ def create_graphs_new(halolist, tab, mwdm, parameters):
     mass = torch.tensor(mwdm, dtype=torch.float32) #target
         
         
-    #print(all_tab_features[1], flush = True)
     
+    # print(np.array(all_tab_features).shape, flush = True)
     data = Data(x=torch.Tensor(np.array(all_tab_features)), u = torch.tensor(u, dtype=torch.float32), y=mass)
     
     return [data]
 
 #-------------------------------------------------------------------------------------------------------------------------------
 
-mass_sim = np.loadtxt('/hildafs/projects/phy200026p/bwangc/MassGraphNet/data/users.flatironinstitute.org/~fvillaescusa/VOSS5/sobol_sequence_WDM_real_values.txt')
+mass_sim = np.loadtxt('/ocean/projects/phy240022p/bwangc/MassGraphNet/data/sobol_sequence_WDM_real_values.txt')
 
 #read the data
 def create_start_end_indexes(start, end, number):
@@ -182,6 +196,7 @@ def training_set(r_link = 1e-1):
 
     for i in range(start_indexes.shape[0]):
         dataset_train += torch.load("./prepared_data/dataset_%d_%d_%s_%s.pt"%(start_indexes[i], end_indexes[i], study_name, sys.argv[1]))
+        
     
     return dataset_train
     
@@ -215,6 +230,8 @@ def test_set(r_link = 1e-1):
 
 if __name__ == "__main__":
     print('reading')
+    
+   
 
     train_dataset = training_set()
     # torch.save(train_dataset, name_train)
